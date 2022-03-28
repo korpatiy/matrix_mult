@@ -2,14 +2,19 @@
 #include <stdlib.h>
 #include <sys/shm.h>
 #include <unistd.h>
+#include <time.h>
+
+typedef struct child {
+    pid_t children;
+    int *lines;
+    int size;
+} child;
 
 typedef struct shd_mem {
     int *MATRIX;
     int *VECTOR;
     int ch_num;
-    pid_t *children;
-    int *starts;
-    int *ends;
+    child *childs;
 } shd_mem;
 
 void Print2DMatrix(int *target, int n_size, int m_size);
@@ -28,6 +33,8 @@ int main(int argc, char **argv) {
         printf("Требуется указать в формате [matrix_mult <матрица> <вектор> <кол-во процессов>]");
         exit(1);
     }
+
+    srand(time(NULL));
 
     const char *matrix_fn = argv[1];
     const char *vector_fn = argv[2];
@@ -66,21 +73,41 @@ int main(int argc, char **argv) {
         output = (int *) shmat(shm_2d, NULL, 0);
 
         shd_matrix->ch_num = thread_num;
-        shd_matrix->children = (pid_t *) malloc(sizeof(pid_t) * thread_num);
-        shd_matrix->starts = (int *) malloc(sizeof(pid_t) * thread_num);
-        shd_matrix->ends = (int *) malloc(sizeof(pid_t) * thread_num);
+        shd_matrix->childs = malloc(sizeof(child) * thread_num);
+        //shd_matrix->children = (pid_t *) malloc(sizeof(pid_t) * thread_num);
 
         pid_t parent;
         parent = getpid();
         for (i = 0; i < thread_num; i++) {
             if (getpid() == parent) {
                 pid = fork();
-                shd_matrix->children[i] = getpid();
-                int start_idx = i * (matrix_size_n / (thread_num));
-                shd_matrix->starts[i] = start_idx;
-                shd_matrix->ends[i] = start_idx + (matrix_size_n / (thread_num));
+                shd_matrix->childs[i].children = getpid();
+                int a = i * matrix_size_n / thread_num;
+                int b = a + matrix_size_n / thread_num;
+                int size = b - a;
+                shd_matrix->childs[i].lines = (int *) malloc(sizeof(int) * size);
+                shd_matrix->childs[i].size = size;
+                for (int l = 0, value = a; l < size; l++, value++) {
+                    shd_matrix->childs[i].lines[l] = value;
+                }
             }
         }
+        //printf("last_row - %d\n", last_row_idx);
+
+        //shd_matrix->childs[0].lines[shd_matrix->childs[0].size++] = last_row_idx;
+
+        //Раскидываем остатки
+        /*   for (i = 0; i < thread_num; i++) {
+               if (getpid() == parent) {
+                   printf("last_row - %d\n", last_row_idx);
+                   while (last_row_idx != matrix_size_n) {
+                       printf("last_row != matrix_size");
+                       int idx = (rand() % (thread_num));
+                       shd_matrix->childs[idx].lines[shd_matrix->childs[idx].size++] = last_row_idx;
+                       last_row_idx++;
+                   }
+               }
+           }*/
 
         //error occurred
         if (pid < 0) {
@@ -99,28 +126,21 @@ int main(int argc, char **argv) {
             output = (int *) shmat(shm_2d, NULL, 0);
 
             for (i = 0; i < shd_matrix->ch_num; i++) {
-                if (shd_matrix->children[i] == getpid()) {
-                    order = i;
-                    start = shd_matrix->starts[i];
-                    end = shd_matrix->ends[i];
+                if (shd_matrix->childs[i].children == getpid()) {
+                    printf("proc numb %d:\n", i);
+                    for (int l = 0; l < shd_matrix->childs[i].size; l++) {
+                        int line = shd_matrix->childs[i].lines[l];
+                        printf("line - %d\n", shd_matrix->childs[i].lines[l]);
+                        sum = 0;
+                        for (e = 0; e < matrix_size_m; e++) {
+                            sum += shd_matrix->MATRIX[e + line * matrix_size_n] * shd_matrix->VECTOR[e];
+                            //printf("%d * %d\n",shd_matrix->MATRIX[e + j * matrix_size_n], shd_matrix->VECTOR[e]);
+                        }
+                        //printf("%d = %d\n", i, sum);
+                        output[line] = sum;
+                    }
                     break;
                 }
-            }
-
-            printf("Child process (%d)...\n", order);
-            //start = order * (matrix_size_n / (thread_num));
-            printf("start %d\n", start);
-            // end = start + (matrix_size_n / (thread_num));
-            printf("end %d\n", end);
-
-            for (i = start; i < end; i++) {
-                sum = 0;
-                for (e = 0; e < matrix_size_m; e++) {
-                    sum += shd_matrix->MATRIX[e + i * matrix_size_n] * shd_matrix->VECTOR[e];
-                    //printf("%d * %d\n",shd_matrix->MATRIX[e + j * matrix_size_n], shd_matrix->VECTOR[e]);
-                }
-                //printf("%d = %d\n", i, sum);
-                output[i] = sum;
             }
         }
             //parent process
